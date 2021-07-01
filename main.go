@@ -1,29 +1,53 @@
 package main
 
 import (
-	"fmt"
+	"github.com/bitrise-steplib/steps-activate-ssh-key/pathutil"
+	"os"
 
-	"github.com/bitrise-io/go-steputils/stepconf"
 	"github.com/bitrise-io/go-utils/log"
-	"github.com/bitrise-steplib/steps-activate-ssh-key/activatesshkey"
+	"github.com/bitrise-steplib/steps-activate-ssh-key/command"
+	"github.com/bitrise-steplib/steps-activate-ssh-key/env"
+	"github.com/bitrise-steplib/steps-activate-ssh-key/filewriter"
+	localLogger "github.com/bitrise-steplib/steps-activate-ssh-key/log"
+	"github.com/bitrise-steplib/steps-activate-ssh-key/sshkey"
+	"github.com/bitrise-steplib/steps-activate-ssh-key/step"
 )
 
 func main() {
-	var cfg activatesshkey.Config
-	if err := stepconf.Parse(&cfg); err != nil {
-		failf("Issue with input: %s", err)
+	if err := run(); err != nil {
+		log.Errorf("Step run failed: %s", err.Error())
+		os.Exit(1)
 	}
+}
 
-	stepconf.Print(cfg)
-	fmt.Println()
-
-	log.SetEnableDebugLog(cfg.Verbose)
-
-	if err := activatesshkey.Execute(activatesshkey.Config{
-		SSHRsaPrivateKey:        cfg.SSHRsaPrivateKey,
-		SSHKeySavePath:          cfg.SSHKeySavePath,
-		IsRemoveOtherIdentities: cfg.IsRemoveOtherIdentities,
-	}); err != nil {
-		failf(err.Error())
+func run() error {
+	activateSSHKey := createActivateSSHKey()
+	config, err := activateSSHKey.ProcessConfig()
+	if err != nil {
+		return err
 	}
+	result, err := activateSSHKey.Run(config)
+	if err != nil {
+		return err
+	}
+	if err := activateSSHKey.Export(result); err != nil {
+		return err
+	}
+	return nil
+}
+
+func createActivateSSHKey() *step.ActivateSSHKey {
+	stepInputParser := step.NewEnvInputParser()
+
+	logger := localLogger.NewDefaultLogger()
+	osEnvRepository := env.NewOsRepository()
+	envmanEnvRepository := env.NewEnvmanRepository()
+	envValueClearer := step.NewCombinedEnvValueClearer(logger, osEnvRepository, envmanEnvRepository)
+
+	fileWriter := filewriter.NewOsFileWriter()
+	tempDirProvider := pathutil.NewOsTempDirProvider()
+	commandFactory := command.NewCommand
+	agent := sshkey.NewAgent(fileWriter, tempDirProvider, logger, commandFactory)
+
+	return step.NewActivateSSHKey(stepInputParser, *envValueClearer, envmanEnvRepository, osEnvRepository, fileWriter, *agent, logger)
 }
